@@ -1,0 +1,180 @@
+#include<string.h>
+#include <ESP8266WiFi.h>
+#include <WiFiClient.h>
+#include <ESP8266WebServer.h>
+#include <ESP8266mDNS.h>
+#include <Servo.h>
+
+const char* ssid = "컴퓨터공학과free 2.4";//"415 free 2G";
+const char* password = "0548205480";//"0548205480";
+boolean emergency = false;
+
+//LED 상수
+const int LED_R = 16;
+const int LED_Y = 5;
+const int LED_G = 4;
+
+const int gasPin = A0;
+const int gasWarningAmount = 512;
+
+//set motor pin
+const int motorPin = 13;
+
+//set speakerPin
+const int speakerPin  = 12;
+char gasAmount[256];
+
+ESP8266WebServer server(80);
+Servo servo;
+
+
+//모터 열기 작동
+void motorRotate() {
+  if (emergency == false) {
+    servo.attach(motorPin);
+    for (int i = 0; i <= 40; i++) {
+      servo.write(i);
+      delay(20);
+    }
+    servo.detach();
+    server.send(200, "text/html", "valve on");
+
+    ledOn(LED_Y);
+  }
+}
+
+
+//모터 닫기 동작
+void motorRotateReverse() {
+  if (emergency == false) {
+    servo.attach(motorPin);
+    for (int i = 180; i >= 160; i--) {
+      servo.write(i);
+      delay(20);
+    }
+    servo.detach();
+    server.send(200, "text/html", "valve off");
+  }
+  ledOn(LED_G);
+}
+
+//긴급상황 초기화
+void resetEmergency() {
+  emergency = false;
+  ledOffAll();
+  ledOn(LED_G);
+  motorRotateReverse();
+  noTone(speakerPin);
+  server.send(200, "text/plain", "reset on");
+}
+
+//현재 상태 가스 누출값 불러오기
+void loadStatus() {
+  sprintf(gasAmount, "%d", analogRead(gasPin));
+  if (emergency == true) {
+    strcat(gasAmount , " TRUE");
+  }
+  else {
+    strcat(gasAmount , " FALSE");
+  }
+  server.send(200, "text/html", gasAmount);
+  //Serial.println(gasAmount); //센서값을 시리얼모니터로 전송
+
+}
+
+//html못 찾았을경우 뜨는 창
+void handleNotFound() {
+  String message = "File Not Found\n\n";
+  message += "URI: ";
+  message += server.uri();
+  message += "\nMethod: ";
+  message += (server.method() == HTTP_GET) ? "GET" : "POST";
+  message += "\nArguments: ";
+  message += server.args();
+  message += "\n";
+  for (uint8_t i = 0; i < server.args(); i++) {
+    message += " " + server.argName(i) + ": " + server.arg(i) + "\n";
+  }
+}
+
+//신호등 동작
+void ledOn(int led) {
+  ledOffAll();
+  digitalWrite(led, HIGH);
+}
+
+//신호등 전부 끄기
+void ledOffAll() {
+  digitalWrite(LED_R, LOW);
+  digitalWrite(LED_G, LOW);
+  digitalWrite(LED_Y, LOW);
+}
+
+
+void setup(void) {
+  Serial.begin(115200);
+  WiFi.begin(ssid, password);
+  Serial.println("");
+
+  //LED 핀 설정
+  pinMode(LED_R, OUTPUT);
+  pinMode(LED_Y, OUTPUT);
+  pinMode(LED_G, OUTPUT);
+
+  // Wait for connection
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("");
+  Serial.print("Connected to ");
+  Serial.println(ssid);
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
+
+  if (MDNS.begin("esp8266")) {
+    Serial.println("MDNS responder started");
+  }
+
+  server.on("/motorOn", motorRotate);
+
+  server.on("/motorOff", motorRotateReverse);
+
+  server.on("/loadStatus", loadStatus);
+
+  server.on("/resetEmergency", resetEmergency);
+
+  server.onNotFound(handleNotFound);
+
+  server.begin();
+  Serial.println("HTTP server started");
+
+  motorRotateReverse();
+}
+
+void loop(void) {
+  server.handleClient();
+  //Serial.println(analogRead(gasPin)); //센서값을 시리얼모니터로 전송
+  //Serial.println(emergency); //센서값을 시리얼모니터로 전송
+  if (analogRead(gasPin) > gasWarningAmount)   // 가스 검출 시(자신의 센서 감도에 알맞게 조절필요)
+  {
+
+    if (emergency == false) {
+
+      ledOn(LED_R);
+      tone(speakerPin, 500, 1000); // 스피커 ON (주파수 2000으로 1초간 울리기)
+
+      servo.attach(motorPin);
+      for (int i = 180; i >= 160; i--) {
+        servo.write(i);
+        delay(20);
+      }
+      servo.detach();
+
+      emergency = true;
+    }
+  }else {
+    noTone(speakerPin);
+  }
+  delay(500);
+}

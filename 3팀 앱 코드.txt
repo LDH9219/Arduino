@@ -1,0 +1,217 @@
+package com.example.myapplication;
+import androidx.annotation.NonNull;
+import androidx.appcompat.app.ActionBar;
+import androidx.appcompat.app.AppCompatActivity;
+
+import android.graphics.Color;
+import android.os.AsyncTask;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Message;
+import android.util.Log;
+import android.view.View;
+import android.view.animation.Animation;
+import android.view.animation.AnimationUtils;
+import android.webkit.WebChromeClient;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.ImageView;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
+import org.jsoup.select.Elements;
+
+import java.io.IOException;
+import java.util.Timer;
+import java.util.TimerTask;
+
+public class MainActivity extends AppCompatActivity {
+    String htmlPageUrl = "http://192.168.0.52";
+    String htmlContentInStringFormat = "";
+    TextView gasValueTxt;
+    WebView webView;
+    TextView presentStatus;
+    Button loadStatus, btnon, btnoff, reset;
+    String[] gasCheck;
+    final int gasWarningAmount = 512; //
+    ImageView valveImg, sirenImg;
+    Animation open_anim;
+    Animation close_anim;
+
+    //아두이노 웹서버로 특정 함수 호출 요청
+    public void requestArduino(String method){
+        webView.loadUrl(htmlPageUrl + "/" + method);
+    }
+
+    //스마트폰 화면의 현재상태 텍스트와 색깔을 설정
+    public void setStatustext(String txt, String color){
+        presentStatus.setText("현재상태 : " + txt);
+        presentStatus.setTextColor(Color.parseColor("#"+color));
+    }
+
+    //버튼의 터치 가능한 여부를 설정 (ex. 연결이 끊어졌을떄 터치가 불가능하게)
+    public void setButtonsClickable(boolean b, Button... btns){
+        for(Button btn : btns){
+            if(b){
+                btn.setBackgroundColor(R.drawable.valve_open_on);
+            }else{
+                btn.setBackgroundColor(R.drawable.btn_off);
+            }
+            btn.setClickable(b);
+        }
+    }
+
+    //메인함수
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+        ActionBar actionBar = getSupportActionBar();
+        actionBar.hide();
+        btnon = findViewById(R.id.btnon);
+        btnoff = findViewById(R.id.btnoff);
+        loadStatus = findViewById(R.id.loadStatus);
+        reset = findViewById(R.id.reset);
+        webView = findViewById(R.id.webView);
+        webView.setWebViewClient(new WebViewClient());
+        webView.setWebChromeClient(new WebChromeClient());
+        gasValueTxt = findViewById(R.id.gasValueTxt);
+        presentStatus = findViewById(R.id.presentStatus);
+        valveImg = findViewById(R.id.valveimg);
+        sirenImg = findViewById(R.id.sirenimg);
+
+        // 애니메이션xml 파일을 로드
+        open_anim = AnimationUtils.loadAnimation(getApplicationContext(), R.anim.open);
+        close_anim = AnimationUtils.loadAnimation(getApplicationContext(), R.anim.close);
+
+        //모터 열림 작동 버튼
+        btnon.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                requestArduino("motorOn");
+                setStatustext("ON","000000");
+
+                // 애니메이션
+                valveImg.startAnimation(open_anim);
+                valveImg.invalidate();
+            }
+        });
+
+        //모터 닫힘 작동 버튼
+        btnoff.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                requestArduino("motorOff");
+                setStatustext("OFF","000000");
+
+                // 애니메이션을 시작
+                valveImg.startAnimation(close_anim);
+                valveImg.invalidate();
+            }
+        });
+
+        //가스 누출 경보 해제
+        reset.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                try{
+                    if(Integer.parseInt(gasCheck[0])<gasWarningAmount) {
+                        requestArduino("resetEmergency");
+                        setStatustext("OFF", "000000");
+                        setButtonsClickable(true, btnon, btnoff);
+                        Toast.makeText(getApplicationContext(), "초기화가 되었습니다.", Toast.LENGTH_LONG).show();
+                        sirenImg.setVisibility(View.INVISIBLE);
+                    }
+                }catch(Exception e){
+                        Log.e("error",e.toString());
+                }
+            }
+        });
+
+
+        //현재 상태 불러오기 버튼
+        loadStatus.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                JsoupAsyncTask jat = new JsoupAsyncTask();
+                jat.execute();
+            }
+        });
+
+        //loadStatus 반복호출
+        Timer timer = new Timer();
+        TimerTask TT = new TimerTask() {
+            @Override
+            public void run() {
+                loadStatus.callOnClick();
+            }
+        };
+        timer.schedule(TT,1000,1000);
+
+
+    }
+
+    private class JsoupAsyncTask extends AsyncTask<Void, Void, Void> {
+
+        @Override
+        protected void onPreExecute() {
+            super.onPreExecute();
+        }
+
+        @Override
+        protected Void doInBackground(Void... params) {
+            try {
+                Document doc = Jsoup.connect(htmlPageUrl + "/loadStatus").get();
+
+                Elements links = doc.getAllElements();
+                for (Element link : links) {
+                    htmlContentInStringFormat = "";
+                    htmlContentInStringFormat += link.text();
+                }
+            } catch (Exception e) {
+                Log.e("error",e.toString());
+
+            }
+            return null;
+        }
+
+        @Override
+        protected void onPostExecute(Void result) {
+            try {
+                //크롤링 성공
+                if(htmlContentInStringFormat.length()>1){
+                    gasCheck = htmlContentInStringFormat.split(" ");
+                    gasValueTxt.setText("gas amount: " + gasCheck[0]);
+                    //가스 누출 감지(최우선)
+                    if (gasCheck[1].equals("TRUE")) {
+                        setStatustext("누출 감지","F44336");
+                        setButtonsClickable(false, btnon, btnoff);
+                        sirenImg.setVisibility(View.VISIBLE);
+                    }
+                    //연결 첫 성공
+                    else if(presentStatus.getText().equals("현재 상태 : 연결 없음")) {
+                        setButtonsClickable(true, btnon, btnoff);
+                        btnoff.callOnClick();
+                        setStatustext("OFF","000000");
+
+                    }
+                    //else 현상태 유지
+                }
+
+                else { //크롤링 실패
+                    setStatustext("연결없음","000000");
+                    setButtonsClickable(false, btnon, btnoff);
+                }
+            }
+            catch(Exception e){
+                Log.e("error",e.toString());
+            }
+
+        }
+    }
+}
